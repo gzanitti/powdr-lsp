@@ -1,60 +1,38 @@
-let main_degree: int = 2**16;
-let or_degree: int = 2**16;
+let N: int = 32;
+let LAST_ROW = N - 1;
 
-// Like block_lookup_or.pil, but using a permutation to connect the Main and Or machine
+namespace std::prover(N);
+    enum Query {
+        Hint(fe),
+        Input(int, int),
+        Output(int, int),
+        None,
+    }
 
-namespace std::convert;
-    // Due to its name, the semantics of this function will be overridden.
-    // We ensure that this happens by making it diverge in its given semantics.
-    let int = [|i| int(i)];
-
-// ORs two 32-bit numbers, byte-by-byte.
-namespace Or(or_degree);
-    col fixed RESET(i) { if (i % 4) == 3 { 1 } else { 0 } };
-    col fixed FACTOR(i) { 1 << (((i + 1) % 4) * 8) };
-
-    // In the latch row, indicates whether this block is actually used or is just filling up unused rows.
-    // These will be used as the RHS selectors of the connecting permutations.
-    col witness selector1, selector2;
-    selector1 * (1 - selector1) = 0;
-    selector2 * (1 - selector2) = 0;
-
-    // Only one or 0 selectors can be active:
-    let selector_sum = selector1 + selector2;
-    selector_sum * (1 - selector_sum) = 0;
-
-    let a = |i| i % 256;
-    col fixed P_A(i) { a(i) };
-    let b = |i| (i >> 8) % 256;
-    col fixed P_B(i) { b(i) };
-    col fixed P_C(i) { (a(i) | b(i)) & 0xff };
-
-    // ROW RESET  FACTOR
-    //   0   0    1 << 8
-    //   1   0    1 << 16
-    //   2   0    1 << 24
-    //   3   1    1 << 0
-
-    col witness A_byte;
-    col witness B_byte;
-    col witness C_byte;
-
-    col witness A;
-    col witness B;
-    col witness C;
-
-    A' = A * (1 - RESET) + A_byte * FACTOR;
-    B' = B * (1 - RESET) + B_byte * FACTOR;
-    C' = C * (1 - RESET) + C_byte * FACTOR;
-
-    [A_byte, B_byte, C_byte] in [P_A, P_B, P_C];
-
-namespace Main(main_degree);
-    col fixed a(i) { (i + 13) & 0xffffffff };
-    col fixed b(i) { ((i + 19) * 17) & 0xffffffff };
-    col witness c;
-    col fixed NTH(i) { if i % 32 == 16 { 1 } else { 0 } };
-
-    NTH $ [a, b, c] is (Or::selector1 * Or::RESET) $ [Or::A, Or::B, Or::C];
-    NTH' $ [a, b, c] is (Or::selector2 * Or::RESET) $ [Or::A, Or::B, Or::C];
+namespace MainMachine(8..64);  
+    col fixed FIRST = [1] + [0]*;
+    col fixed LAST(i) { if i == LAST_ROW { 1 } else { 0 } };
+    col fixed DOUBLE(i) { i * 2 };
+    
+    col witness input(i) query match i {
+        0 => std::prelude::Query::Input(0, 1),
+        1 => std::prelude::Query::Input(0, 2),
+        _ => std::prelude::Query::None,
+    };
+    
+    col witness operation_id(i) query std::prelude::Query::Hint(6);
+    col witness x[3];  
+    col witness accumulator;
+    
+    x[2] = x[0] + x[1];
+    
+    [input, x[0]] in [DOUBLE, x[1]];
+    
+    accumulator' = (1 - LAST) * (accumulator + input);
+    LAST * accumulator' = 0;
+    
+    (1 - LAST) * (operation_id' - operation_id) = 0;
+    
+    public out = x[2](LAST_ROW);
+    public final_acc = accumulator(LAST_ROW);
 
