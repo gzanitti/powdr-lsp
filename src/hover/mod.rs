@@ -1,6 +1,6 @@
-use std::{collections::HashMap, iter};
+use std::collections::HashMap;
 
-use powdr::ast::{
+use powdr_ast::{
     analyzed::Analyzed, asm_analysis::AnalysisASMFile, parsed::asm::parse_absolute_path,
 };
 use tower_lsp::lsp_types::*;
@@ -88,12 +88,32 @@ impl<T> HoverProvider<T> {
     fn get_token_from_asm(&self, analyzed: &AnalysisASMFile, word: String) -> Option<Token> {
         let machine_token = analyzed
             .get_machine(&parse_absolute_path(&format!("::{}", word)))
-            .map(|machine| Token {
-                token_type: TokenType::Machine,
-                values: HashMap::from_iter([
-                    ("name".to_string(), word.clone()),
-                    ("degree".to_string(), machine.degree.to_string()),
-                ]),
+            .map(|machine| {
+                let degree_values = match (machine.degree.min.clone(), machine.degree.max.clone()) {
+                    (Some(min), Some(max)) => {
+                        if min == max {
+                            vec![("degree".to_string(), min.to_string())]
+                        } else {
+                            vec![
+                                ("degree_min".to_string(), min.to_string()),
+                                ("degree_max".to_string(), max.to_string()),
+                            ]
+                        }
+                    }
+                    (Some(val), None) | (None, Some(val)) => {
+                        vec![("degree".to_string(), val.to_string())]
+                    }
+                    (None, None) => vec![],
+                };
+
+                Token {
+                    token_type: TokenType::Machine,
+                    values: HashMap::from_iter(
+                        [("name".to_string(), word.clone())]
+                            .into_iter()
+                            .chain(degree_values),
+                    ),
+                }
             });
 
         let instruction_token = analyzed.clone().into_machines().find_map(|machine| {
@@ -104,7 +124,10 @@ impl<T> HoverProvider<T> {
                 .find(|function| function.name.to_string() == word)
                 .map(|function| Token {
                     token_type: TokenType::Callable,
-                    values: HashMap::from_iter(iter::once(("name".to_string(), word.clone()))),
+                    values: HashMap::from_iter([
+                        ("name".to_string(), word.clone()),
+                        ("symbol".to_string(), format!("{:?}", function.symbol)),
+                    ]),
                 })
         });
 
@@ -114,9 +137,12 @@ impl<T> HoverProvider<T> {
                 .registers
                 .into_iter()
                 .find(|reg| reg.name.to_string() == word)
-                .map(|function| Token {
+                .map(|reg| Token {
                     token_type: TokenType::Register,
-                    values: HashMap::from_iter(iter::once(("name".to_string(), word.clone()))),
+                    values: HashMap::from_iter([
+                        ("name".to_string(), word.clone()),
+                        ("type".to_string(), reg.ty.to_string()),
+                    ]),
                 })
         });
 
@@ -133,23 +159,33 @@ impl<T> HoverProvider<T> {
     fn get_hover_content(&self, token: Token) -> String {
         match token.token_type {
             TokenType::Machine => {
+                let degree_text = if let Some(degree) = token.values.get("degree") {
+                    degree.to_string()
+                } else {
+                    match (
+                        token.values.get("degree_min"),
+                        token.values.get("degree_max"),
+                    ) {
+                        (Some(min), Some(max)) => format!(" Min:{}, Max:{}", min, max),
+                        _ => "".to_string(),
+                    }
+                };
+
                 format!(
-                    "### Machine Definition\n\n\
+                    "### Machine\n\n\
                     \n\
-                    Name: {}\n\
-                    Degree: {}\n\
-                    Registers: \n\
-                    Available Instructions: \n\
-                    \n\n\
-                    Small explanation of what a machine is.",
+                    Name: {}\n\n\
+                    {}\
+                    \n\n",
                     token
                         .values
                         .get("name")
                         .map_or("".to_string(), |v| v.to_string()),
-                    token
-                        .values
-                        .get("degree")
-                        .map_or("".to_string(), |v| v.to_string()),
+                    if !degree_text.is_empty() {
+                        format!("Degree: {}\n", degree_text)
+                    } else {
+                        String::new()
+                    }
                 )
             }
             TokenType::Callable => {
@@ -157,10 +193,7 @@ impl<T> HoverProvider<T> {
                     "### Instruction\n\n\
                     \n\
                     Name: {}\n\
-                    Parameters: \n\
-                    Selector Columns: \n\
-                    \n\n\
-                    Small explanation of what an instruction is.",
+                    \n\n",
                     token
                         .values
                         .get("name")
@@ -171,12 +204,16 @@ impl<T> HoverProvider<T> {
                 format!(
                     "### Register\n\n\
                     \n\
-                    Name: {}\n\
-                    \n\n\
-                    Small explanation of what a register is.",
+                    Name: {}\n\n\
+                    Type: {}\n\n\
+                    \n\n",
                     token
                         .values
                         .get("name")
+                        .map_or("".to_string(), |v| v.to_string()),
+                    token
+                        .values
+                        .get("type")
                         .map_or("".to_string(), |v| v.to_string()),
                 )
             }

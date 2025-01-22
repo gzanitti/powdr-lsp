@@ -5,7 +5,7 @@ use std::sync::RwLock;
 
 use hover::HoverProvider;
 use parser::AnalyzedDoc;
-use powdr::FieldElement;
+use powdr_number::FieldElement;
 use std::collections::HashMap;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -93,7 +93,7 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::build(|client| Backend::<powdr::GoldilocksField> {
+    let (service, socket) = LspService::build(|client| Backend::<powdr_number::GoldilocksField> {
         client,
         documents: std::sync::RwLock::new(std::collections::HashMap::new()),
     })

@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
-use powdr::Error as PowdrError;
-use powdr::ast::analyzed::Analyzed;
-use powdr::ast::asm_analysis::AnalysisASMFile;
+use powdr_ast::analyzed::Analyzed;
+use powdr_ast::asm_analysis::AnalysisASMFile;
+use powdr_parser_util::Error as PowdrError;
 
-use powdr::{FieldElement, parser, pil_analyzer};
+use powdr_number::FieldElement;
+use powdr_parser;
+use powdr_pil_analyzer;
 use tower_lsp::lsp_types::*;
 
 pub struct ParseResult<T> {
@@ -111,16 +113,16 @@ pub fn parse<T: FieldElement>(content: &str, uri: &Url) -> ParseResult<T> {
     }
 }
 fn parse_asm(path: &str, content: &str) -> Result<AnalysisASMFile, Vec<Error>> {
-    let parsed_asm = match parser::parse_asm(Some(path), content) {
+    let parsed_asm = match powdr_parser::parse_asm(Some(path), content) {
         Ok(asm) => asm,
         Err(e) => return Err(vec![e.into()]),
     };
 
     let resolved =
-        powdr::importer::load_dependencies_and_resolve(Some(PathBuf::from(path)), parsed_asm)
+        powdr_importer::load_dependencies_and_resolve(Some(PathBuf::from(path)), parsed_asm)
             .map_err(|e| vec![e.into()])?;
 
-    powdr::asm_analyzer::analyze(resolved).map_err(|strings| {
+    powdr_analysis::analyze(resolved).map_err(|strings| {
         strings
             .into_iter()
             .map(|message| Error {
@@ -132,7 +134,7 @@ fn parse_asm(path: &str, content: &str) -> Result<AnalysisASMFile, Vec<Error>> {
 }
 
 fn parse_pil<T: FieldElement>(content: &str) -> Result<Analyzed<T>, Vec<Error>> {
-    match pil_analyzer::analyze_string::<T>(content) {
+    match powdr_pil_analyzer::analyze_string::<T>(content) {
         Ok(pil) => Ok(pil),
         Err(e) => Err(e.into_iter().map(|err| err.into()).collect()),
     }
