@@ -19,8 +19,6 @@ mod types {
 
 machine MainVM with 
     degree: 128,
-    latch: latch,
-    operation_id: operation_id 
 {
     SubVM subvm(8, 64);
     Memory mem;

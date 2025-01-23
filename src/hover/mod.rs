@@ -16,6 +16,10 @@ enum TokenType {
     Machine,
     Callable,
     Register,
+    Definition, //TODO: Specialize this for different types of definitions
+    Public,
+    Intermediate,
+    TraitImpl,
 }
 
 struct Token {
@@ -28,7 +32,7 @@ impl<T> HoverProvider<T> {
         Self { text, analyzed }
     }
 
-    fn get_word_at_position(&self, position: Position) -> Option<(String, usize, usize)> {
+    pub fn get_word_at_position(&self, position: Position) -> Option<(String, usize, usize)> {
         let lines: Vec<&str> = self.text.lines().collect();
         let line = lines.get(position.line as usize)?;
 
@@ -38,42 +42,25 @@ impl<T> HoverProvider<T> {
 
         // Check if we're on a non-whitespace character
         let char_at_position = line.chars().nth(position.character as usize)?;
-        if char_at_position.is_whitespace() {
+        if !is_identifier_char(char_at_position) {
             return None;
         }
 
         let start = line[..position.character as usize]
             .chars()
             .rev()
-            .take_while(|c| !c.is_whitespace())
+            .take_while(|c| is_identifier_char(*c))
             .count();
         let end = line[position.character as usize..]
             .chars()
-            .take_while(|c| !c.is_whitespace())
+            .take_while(|c| is_identifier_char(*c))
             .count();
 
         let initial_start = position.character as usize - start;
         let initial_end = position.character as usize + end;
-        let initial_word = line[initial_start..initial_end].to_string();
+        let word = line[initial_start..initial_end].to_string();
 
-        // Calculate new boundaries while cleaning up the word
-        let mut word = initial_word.clone();
-        let mut final_end = initial_end;
-
-        if let Some(paren_idx) = word.find('(') {
-            word = word[..paren_idx].to_string();
-            final_end = initial_start + paren_idx;
-        }
-        if let Some(bracket_idx) = word.find('[') {
-            word = word[..bracket_idx].to_string();
-            final_end = initial_start + bracket_idx;
-        }
-        if let Some(brace_idx) = word.find('{') {
-            word = word[..brace_idx].to_string();
-            final_end = initial_start + brace_idx;
-        }
-
-        Some((word, initial_start, final_end))
+        Some((word, initial_start, initial_end))
     }
 
     fn get_token_at_position(&self, position: Position) -> Option<Token> {
@@ -116,6 +103,7 @@ impl<T> HoverProvider<T> {
                 }
             });
 
+        // TODO: avoid clone
         let instruction_token = analyzed.clone().into_machines().find_map(|machine| {
             machine
                 .1
@@ -131,6 +119,7 @@ impl<T> HoverProvider<T> {
                 })
         });
 
+        //TODO: Avoid clone
         let register_token = analyzed.clone().into_machines().find_map(|machine| {
             machine
                 .1
@@ -149,11 +138,33 @@ impl<T> HoverProvider<T> {
         machine_token.or(instruction_token).or(register_token)
     }
 
-    fn get_token_from_pil(&self, _analyzed: &Analyzed<T>, word: String) -> Option<Token> {
-        Some(Token {
-            token_type: TokenType::Callable,
-            values: HashMap::from_iter([("name".to_string(), word)]),
-        })
+    fn get_token_from_pil(&self, analyzed: &Analyzed<T>, word: String) -> Option<Token> {
+        //TODO: Find a better way to do this.
+        let definition = analyzed.definitions.get(&word).map(|_def| Token {
+            token_type: TokenType::Definition,
+            values: HashMap::from_iter([("name".to_string(), word.clone())]),
+        });
+
+        let public = analyzed.public_declarations.get(&word).map(|_def| Token {
+            token_type: TokenType::Public,
+            values: HashMap::from_iter([("name".to_string(), word.clone())]),
+        });
+
+        let intermediate = analyzed.intermediate_columns.get(&word).map(|_def| Token {
+            token_type: TokenType::Intermediate,
+            values: HashMap::from_iter([("name".to_string(), word.clone())]),
+        });
+
+        let trait_impl = analyzed
+            .trait_impls
+            .iter()
+            .find(|timpl| timpl.name.to_string() == word) //TODO: Resolve String to SymbolPath
+            .map(|_timpl| Token {
+                token_type: TokenType::TraitImpl,
+                values: HashMap::from_iter([("name".to_string(), word.clone())]),
+            });
+
+        definition.or(public).or(intermediate).or(trait_impl)
     }
 
     fn get_hover_content(&self, token: Token) -> String {
@@ -217,6 +228,54 @@ impl<T> HoverProvider<T> {
                         .map_or("".to_string(), |v| v.to_string()),
                 )
             }
+            TokenType::Definition => {
+                format!(
+                    "### Definition\n\n\
+                    \n\
+                    Name: {}\n\n\
+                    \n\n",
+                    token
+                        .values
+                        .get("name")
+                        .map_or("".to_string(), |v| v.to_string()),
+                )
+            }
+            TokenType::Public => {
+                format!(
+                    "### Public\n\n\
+                    \n\
+                    Name: {}\n\n\
+                    \n\n",
+                    token
+                        .values
+                        .get("name")
+                        .map_or("".to_string(), |v| v.to_string()),
+                )
+            }
+            TokenType::Intermediate => {
+                format!(
+                    "### Intermediate\n\n\
+                    \n\
+                    Name: {}\n\n\
+                    \n\n",
+                    token
+                        .values
+                        .get("name")
+                        .map_or("".to_string(), |v| v.to_string()),
+                )
+            }
+            TokenType::TraitImpl => {
+                format!(
+                    "### Trait Implementation\n\n\
+                    \n\
+                    Name: {}\n\n\
+                    \n\n",
+                    token
+                        .values
+                        .get("name")
+                        .map_or("".to_string(), |v| v.to_string()),
+                )
+            }
         }
     }
     pub fn get_hover(&self, position: Position) -> Option<Hover> {
@@ -232,4 +291,8 @@ impl<T> HoverProvider<T> {
             range: Some(Range::new(position, position)),
         })
     }
+}
+
+fn is_identifier_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
