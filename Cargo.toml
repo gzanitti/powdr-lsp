@@ -7,13 +7,13 @@ edition = "2024"
 tower-lsp = "0.20.0"
 tokio = { version = "1.32.0", features = ["full"] }
 serde_json = "1.0.107"
-powdr-parser = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "statement_errors" }
-powdr-importer = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "statement_errors" }
-powdr-parser-util = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "statement_errors" }
-powdr-ast = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "statement_errors" }
-powdr-number = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "statement_errors" }
-powdr-analysis = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "statement_errors" }
-powdr-pil-analyzer = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "statement_errors" }
+powdr-parser = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "access_analyzer" }
+powdr-importer = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "access_analyzer" }
+powdr-parser-util = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "access_analyzer" }
+powdr-ast = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "access_analyzer" }
+powdr-number = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "access_analyzer" }
+powdr-analysis = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "access_analyzer" }
+powdr-pil-analyzer = { git = "https://github.com/powdr-labs/powdr", default-features = false, branch = "access_analyzer" }
 
 [build-dependencies]
 lalrpop = "0.20.0"

@@ -37,7 +37,7 @@ struct ParsedDocument<T> {
 #[derive(Debug, Clone, PartialEq)]
 enum SymbolKind {
     Machine,
-    Function,
+    Callable,
     Register,
     Definition,
     Public,
@@ -54,16 +54,23 @@ impl<T: FieldElement> ProjectCache<T> {
     }
 
     fn update_document(&mut self, uri: Url, doc: ParsedDocument<T>) {
-        // Remove old symbol entries for this document
         self.remove_document_symbols(&uri);
 
-        // Index all symbols from the new document
         match &doc.ast {
             AnalyzedDoc::ASM(asm) => {
-                for (name, _) in asm.machines() {
+                for (name, machine) in asm.machines() {
+                    for callable in &machine.callable {
+                        self.add_symbol(
+                            callable.name.to_string(),
+                            uri.clone(),
+                            SymbolKind::Callable,
+                        );
+                    }
+                    for reg in &machine.registers {
+                        self.add_symbol(reg.name.to_string(), uri.clone(), SymbolKind::Register);
+                    }
                     self.add_symbol(name.to_string(), uri.clone(), SymbolKind::Machine);
                 }
-                // Add other ASM symbols...
             }
             AnalyzedDoc::PIL(pil) => {
                 for name in pil.definitions.keys() {
@@ -72,7 +79,12 @@ impl<T: FieldElement> ProjectCache<T> {
                 for name in pil.public_declarations.keys() {
                     self.add_symbol(name.clone(), uri.clone(), SymbolKind::Public);
                 }
-                // Add other PIL symbols...
+                for name in pil.intermediate_columns.keys() {
+                    self.add_symbol(name.clone(), uri.clone(), SymbolKind::Intermediate);
+                }
+                for name in pil.trait_impls.iter().map(|timpl| timpl.name.to_string()) {
+                    self.add_symbol(name, uri.clone(), SymbolKind::TraitImpl);
+                }
             }
         }
 
@@ -90,7 +102,6 @@ impl<T: FieldElement> ProjectCache<T> {
         for locations in self.symbol_locations.values_mut() {
             locations.retain(|(doc_uri, _)| doc_uri != uri);
         }
-        // Clean up empty entries
         self.symbol_locations
             .retain(|_, locations| !locations.is_empty());
     }
@@ -274,18 +285,40 @@ impl<T: FieldElement> LanguageServer for Backend<T> {
         let position = params.text_document_position_params.position;
         let uri = params.text_document_position_params.text_document.uri;
 
-        let cache = self.project_cache.read().unwrap();
-        let doc = match cache.documents.get(&uri) {
-            Some(doc) => doc,
-            None => return Ok(None),
+        // TODO: Remove async and uncomment the following lines
+        // let cache = self.project_cache.read().unwrap();
+        // let doc = match cache.documents.get(&uri) {
+        //     Some(doc) => doc,
+        //     None => return Ok(None),
+        // };
+
+        let doc = {
+            let cache = self.project_cache.read().unwrap();
+            match cache.documents.get(&uri) {
+                Some(doc) => doc.clone(),
+                None => return Ok(None),
+            }
         };
 
         let hover_provider = HoverProvider::new(doc.text.clone(), doc.ast.clone());
+
+        let hover_word = hover_provider.get_word_at_position(position);
+        match hover_word {
+            Some((word, _, _)) => {
+                self.client
+                    .log_message(MessageType::LOG, format!("Hover for: {}", word))
+                    .await;
+            }
+            None => {
+                self.client
+                    .log_message(MessageType::LOG, "No word found at position")
+                    .await;
+            }
+        };
         let hover_result = hover_provider.get_hover(position);
 
         Ok(hover_result)
     }
-
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }

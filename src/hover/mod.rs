@@ -164,7 +164,7 @@ impl<T> HoverProvider<T> {
                 values: HashMap::from_iter([("name".to_string(), word.clone())]),
             });
 
-        definition.or(public).or(intermediate).or(trait_impl)
+        definition.or(public).or(intermediate).or(trait_impl) //TODO: Too naive
     }
 
     fn get_hover_content(&self, token: Token) -> String {
@@ -212,20 +212,22 @@ impl<T> HoverProvider<T> {
                 )
             }
             TokenType::Register => {
+                let type_text = token
+                    .values
+                    .get("type")
+                    .map_or(String::new(), |v| format!("Type: {}\n\n", v));
+
                 format!(
                     "### Register\n\n\
                     \n\
                     Name: {}\n\n\
-                    Type: {}\n\n\
+                    {}\
                     \n\n",
                     token
                         .values
                         .get("name")
                         .map_or("".to_string(), |v| v.to_string()),
-                    token
-                        .values
-                        .get("type")
-                        .map_or("".to_string(), |v| v.to_string()),
+                    type_text
                 )
             }
             TokenType::Definition => {
@@ -294,5 +296,5 @@ impl<T> HoverProvider<T> {
 }
 
 fn is_identifier_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    c.is_alphanumeric() || c == '_' || c == ':' // TODO: Too naive
 }

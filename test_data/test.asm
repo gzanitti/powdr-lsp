@@ -47,7 +47,7 @@ machine MainVM with
     col fixed operation_id = [0]*;
     col fixed latch = [0, 0, 0, 1]*;
 
-    instr assert_zero X { XIsZero = 1 }
+    instr assert_zero -> X { XIsZero = 1 }
     instr mload -> X { [0, ADDR, m_value] is m_selector $ [m_is_write, m_addr, m_value] }
     instr mstore X { [1, ADDR, X] is m_selector $ [m_is_write, m_addr, m_value] }
     instr add X, Y -> Z { X + Y = Z }
