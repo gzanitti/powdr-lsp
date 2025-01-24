@@ -1,118 +1,73 @@
-use std::protocols::bus::bus_receive;
-use std::protocols::bus::bus_send;
-use std::prelude::Query;
-use std::utils::force_bool;
+use std::machines::range::Byte2;
+use std::machines::large_field::memory_with_bootloader_write::MemoryWithBootloaderWrite;
 
-let INTERACTION_ID = 1234;
+let main_degree: int = 2**8;
+let memory_degree: int = 2**8;
 
-mod types {
-    enum Result<T> {
-        Ok(T),
-        Err
-    }
-
-    trait Arithmetic<T> {
-        add: T, T -> T,
-        mul: T, T -> T
-    }
-}
-
-machine MainVM with 
-    degree: 128,
-{
-    SubVM subvm(8, 64);
-    Memory mem;
-
+machine Main with degree: main_degree {
     reg pc[@pc];
     reg X[<=];
     reg Y[<=];
-    reg Z[<=];
     reg A;
-    reg B;
-    reg CNT;
-    reg ADDR;
 
-    col witness XInv;
-    col witness XIsZero;
-    XIsZero = 1 - X * XInv;
-    XIsZero * X = 0;
-    XIsZero * (1 - XIsZero) = 0;
+    col fixed STEP(i) { i };
+    Byte2 byte2;
+    MemoryWithBootloaderWrite memory(byte2, memory_degree, memory_degree);
 
-    col witness m_addr;
-    col witness m_value;
-    col witness m_is_write;
-    col witness m_selector;
-    force_bool(m_selector);
+    instr mload X -> Y link ~> Y = memory.mload(X, STEP);
+    instr mstore X, Y -> link ~> memory.mstore(X, STEP, Y);
+    instr mstore_bootloader X, Y -> link ~> memory.mstore_bootloader(X, STEP, Y);
 
-    col fixed operation_id = [0]*;
-    col fixed latch = [0, 0, 0, 1]*;
-
-    instr assert_zero -> X { XIsZero = 1 }
-    instr mload -> X { [0, ADDR, m_value] is m_selector $ [m_is_write, m_addr, m_value] }
-    instr mstore X { [1, ADDR, X] is m_selector $ [m_is_write, m_addr, m_value] }
-    instr add X, Y -> Z { X + Y = Z }
-    instr mul X, Y -> Z { X * Y = Z }
-    instr square_and_double X -> Y, Z { Y = X * X, Z = 2 * X }
-    instr call_subvm X, Y -> Z link => Z = subvm.compute(X, Y);
-    
-    bus_send(INTERACTION_ID, [0, X, Y, Z], m_is_write);
+    instr assert_eq X, Y {
+        X = Y
+    }
 
     function main {
-        A <=X= ${ std::prelude::Query::Input(0, 1) };
-        B <=Y= A - 7;
+
+        // Initialize memory cells:
+        mstore_bootloader 100, 0;
+        mstore_bootloader 104, 0;
+        mstore_bootloader 200, 0;
+        mstore_bootloader 0xfffffffc, 0;
+
+        // Store 4
+        mstore 100, 4;
         
-        ADDR <=X= 1;
-        mstore(A);
-        X <== mload();
-        
-        Y, Z <=Y,Z= square_and_double(X);
-        
-        A <== call_subvm(Y, Z);
-        
-        assert_zero A;
+        // Read initial memory value
+        A <== mload(104);
+        assert_eq A, 0;
+
+        // Read previously stored value
+        A <== mload(100);
+        assert_eq A, 4;
+
+        // Update previously stored value
+        mstore 100, 7;
+        mstore 100, 8;
+
+        // Read updated values (twice)
+        A <== mload(100);
+        assert_eq A, 8;
+        A <== mload(100);
+        assert_eq A, 8;
+
+        // Write to previously initialized memory cell
+        mstore 104, 1234;
+        A <== mload(104);
+        assert_eq A, 1234;
+
+        // Write very big field element
+        mstore 200, -1;
+        A <== mload(200);
+        assert_eq A, -1;
+
+        // Store at maximal address
+        mstore 0xfffffffc, 1;
+        A <== mload(0xfffffffc);
+        assert_eq A, 1;
+
+
+
         return;
     }
-}
-
-machine SubVM {
-    reg pc[@pc];
-    reg X[<=];
-    reg Y[<=];
-    reg Z[<=];
-    reg A;
-    reg CNT;
-
-    col fixed operation_id = [0]*;
-    col witness XIsZero;
-    
-    instr add X, Y -> Z { X + Y = Z }
-    instr mul X, Y -> Z { X * Y = Z }
-    instr jmpz X, l: label { pc' = XIsZero * l + (1 - XIsZero) * (pc + 1) }
-    instr jmp l: label { pc' = l }
-
-    function compute x: field, y: field -> field {
-        A <=X= x;
-        CNT <=X= y;
-
-        start:
-        jmpz CNT, done;
-        A <== mul(A, x);
-        CNT <=X= CNT - 1;
-        jmp start;
-
-        done:
-        return A;
-    }
-}
-
-machine Memory {
-    reg pc[@pc];
-    reg ADDR;
-    reg VAL;
-    
-    col witness mem_value;
-    col witness mem_addr;
-    
-    instr write ADDR, VAL { mem_addr = ADDR, mem_value = VAL }
-    instr read ADDR -> VAL { mem_addr = ADDR, VAL = mem_value }
 }

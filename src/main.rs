@@ -1,17 +1,22 @@
+mod analyzer;
 mod hover;
 mod parser;
+mod span;
+mod symbol;
 
+use powdr_number::{FieldElement, GoldilocksField};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::RwLock;
-
-use hover::HoverProvider;
-use parser::AnalyzedDoc;
-use powdr_number::{FieldElement, GoldilocksField};
-use std::collections::HashMap;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+
+use crate::analyzer::build_semantic_index;
+use crate::hover::HoverProvider;
+use crate::parser::{AnalyzedDoc, ParseResult};
+use crate::symbol::{SemanticIndex, Symbol, SymbolDetails, SymbolId, SymbolKind};
 
 #[derive(Debug)]
 struct Backend<T: FieldElement> {
@@ -19,33 +24,21 @@ struct Backend<T: FieldElement> {
     project_cache: RwLock<ProjectCache<T>>,
 }
 
+#[derive(Debug, Clone)]
+struct ParsedDocument<T> {
+    analyzed: AnalyzedDoc<T>,
+    text: String,
+    version: i32,
+    semantic_index: SemanticIndex,
+}
+
 #[derive(Debug)]
 struct ProjectCache<T> {
-    // Store parsed files
     documents: HashMap<Url, ParsedDocument<T>>,
-    // Global symbol table for quick lookups across files
     symbol_locations: HashMap<String, Vec<(Url, SymbolKind)>>,
 }
 
-#[derive(Debug, Clone)]
-struct ParsedDocument<T> {
-    ast: AnalyzedDoc<T>,
-    text: String,
-    version: i32,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum SymbolKind {
-    Machine,
-    Callable,
-    Register,
-    Definition,
-    Public,
-    Intermediate,
-    TraitImpl,
-}
-
-impl<T: FieldElement> ProjectCache<T> {
+impl<T> ProjectCache<T> {
     fn new() -> Self {
         Self {
             documents: HashMap::new(),
@@ -56,52 +49,22 @@ impl<T: FieldElement> ProjectCache<T> {
     fn update_document(&mut self, uri: Url, doc: ParsedDocument<T>) {
         self.remove_document_symbols(&uri);
 
-        match &doc.ast {
-            AnalyzedDoc::ASM(asm) => {
-                for (name, machine) in asm.machines() {
-                    for callable in &machine.callable {
-                        self.add_symbol(
-                            callable.name.to_string(),
-                            uri.clone(),
-                            SymbolKind::Callable,
-                        );
-                    }
-                    for reg in &machine.registers {
-                        self.add_symbol(reg.name.to_string(), uri.clone(), SymbolKind::Register);
-                    }
-                    self.add_symbol(name.to_string(), uri.clone(), SymbolKind::Machine);
-                }
-            }
-            AnalyzedDoc::PIL(pil) => {
-                for name in pil.definitions.keys() {
-                    self.add_symbol(name.clone(), uri.clone(), SymbolKind::Definition);
-                }
-                for name in pil.public_declarations.keys() {
-                    self.add_symbol(name.clone(), uri.clone(), SymbolKind::Public);
-                }
-                for name in pil.intermediate_columns.keys() {
-                    self.add_symbol(name.clone(), uri.clone(), SymbolKind::Intermediate);
-                }
-                for name in pil.trait_impls.iter().map(|timpl| timpl.name.to_string()) {
-                    self.add_symbol(name, uri.clone(), SymbolKind::TraitImpl);
-                }
-            }
+        // Actualizar symbol_locations basado en el nuevo semantic_index
+        for (_, symbol) in doc.semantic_index.symbols.iter() {
+            self.symbol_locations
+                .entry(symbol.name.clone())
+                .or_default()
+                .push((uri.clone(), symbol.kind.clone()));
         }
 
         self.documents.insert(uri, doc);
-    }
-
-    fn add_symbol(&mut self, name: String, uri: Url, kind: SymbolKind) {
-        self.symbol_locations
-            .entry(name)
-            .or_default()
-            .push((uri, kind));
     }
 
     fn remove_document_symbols(&mut self, uri: &Url) {
         for locations in self.symbol_locations.values_mut() {
             locations.retain(|(doc_uri, _)| doc_uri != uri);
         }
+
         self.symbol_locations
             .retain(|_, locations| !locations.is_empty());
     }
@@ -160,11 +123,18 @@ impl<T: FieldElement> Backend<T> {
                         })?;
 
                     let result = crate::parser::parse::<T>(&content, &uri);
+                    let (semantic_index, log_messages) =
+                        crate::analyzer::build_semantic_index(&result.analyzed, &content);
+
+                    for message in log_messages {
+                        self.client.log_message(MessageType::INFO, message).await;
+                    }
 
                     let doc = ParsedDocument {
-                        ast: result.analyzed,
+                        analyzed: result.analyzed,
                         text: content,
                         version: 0,
+                        semantic_index,
                     };
 
                     self.project_cache
@@ -213,21 +183,22 @@ impl<T: FieldElement> LanguageServer for Backend<T> {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        self.client
-            .log_message(
-                MessageType::INFO,
-                format!("Opening document: {}", params.text_document.uri),
-            )
-            .await;
         let uri = params.text_document.uri;
         let text = params.text_document.text;
 
         let result = crate::parser::parse::<T>(&text, &uri);
+        let (semantic_index, log_messages) =
+            crate::analyzer::build_semantic_index(&result.analyzed, &text);
+
+        for message in log_messages {
+            self.client.log_message(MessageType::INFO, message).await;
+        }
 
         let doc = ParsedDocument {
-            ast: result.analyzed,
+            analyzed: result.analyzed,
             text: text.clone(),
-            version: 0,
+            version: params.text_document.version,
+            semantic_index,
         };
 
         self.project_cache
@@ -241,24 +212,22 @@ impl<T: FieldElement> LanguageServer for Backend<T> {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        self.client
-            .log_message(
-                MessageType::INFO,
-                format!(
-                    "Document changed: {} (version {})",
-                    params.text_document.uri, params.text_document.version
-                ),
-            )
-            .await;
         let uri = params.text_document.uri;
         let text = params.content_changes[0].text.clone();
 
         let result = crate::parser::parse::<T>(&text, &uri);
+        let (semantic_index, log_messages) =
+            crate::analyzer::build_semantic_index(&result.analyzed, &text);
+
+        for message in log_messages {
+            self.client.log_message(MessageType::INFO, message).await;
+        }
 
         let doc = ParsedDocument {
-            ast: result.analyzed,
+            analyzed: result.analyzed,
             text: text.clone(),
             version: params.text_document.version,
+            semantic_index,
         };
 
         self.project_cache
@@ -271,26 +240,39 @@ impl<T: FieldElement> LanguageServer for Backend<T> {
             .await;
     }
 
+    // async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+    //     let position = params.text_document_position_params.position;
+    //     let uri = params.text_document_position_params.text_document.uri;
+
+    //     let doc = {
+    //         let cache = self.project_cache.read().unwrap();
+    //         match cache.documents.get(&uri) {
+    //             Some(doc) => doc.clone(),
+    //             None => return Ok(None),
+    //         }
+    //     };
+
+    //     let hover_provider = HoverProvider::new(
+    //         doc.text.clone(),
+    //         doc.ast.clone(),
+    //         doc.semantic_index.clone(),
+    //     );
+
+    //     let hover_result = hover_provider.get_hover(position);
+    //     Ok(hover_result)
+    // }
+
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        self.client
-            .log_message(
-                MessageType::LOG,
-                format!(
-                    "Hover request at position {:?} in {}",
-                    params.text_document_position_params.position,
-                    params.text_document_position_params.text_document.uri
-                ),
-            )
-            .await;
         let position = params.text_document_position_params.position;
         let uri = params.text_document_position_params.text_document.uri;
 
-        // TODO: Remove async and uncomment the following lines
-        // let cache = self.project_cache.read().unwrap();
-        // let doc = match cache.documents.get(&uri) {
-        //     Some(doc) => doc,
-        //     None => return Ok(None),
-        // };
+        // First log message
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!("Hover requested at position {:?} in {}", position, uri),
+            )
+            .await;
 
         let doc = {
             let cache = self.project_cache.read().unwrap();
@@ -300,25 +282,43 @@ impl<T: FieldElement> LanguageServer for Backend<T> {
             }
         };
 
-        let hover_provider = HoverProvider::new(doc.text.clone(), doc.ast.clone());
+        self.client
+            .log_message(MessageType::INFO, "Document found, creating hover provider")
+            .await;
 
-        let hover_word = hover_provider.get_word_at_position(position);
-        match hover_word {
-            Some((word, _, _)) => {
-                self.client
-                    .log_message(MessageType::LOG, format!("Hover for: {}", word))
-                    .await;
+        let hover_provider = HoverProvider::new(
+            doc.text.clone(),
+            doc.analyzed.clone(), // TODO: this is ugly
+            doc.semantic_index.clone(),
+        );
+
+        let (hover_result, log_messages) = hover_provider.get_hover(position);
+
+        for message in log_messages {
+            self.client.log_message(MessageType::INFO, message).await;
+        }
+
+        match &hover_result {
+            Some(hover) => {
+                if let HoverContents::Markup(content) = &hover.contents {
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!("Hover content generated: {}", content.value),
+                        )
+                        .await;
+                }
             }
             None => {
                 self.client
-                    .log_message(MessageType::LOG, "No word found at position")
+                    .log_message(MessageType::INFO, "No hover information found")
                     .await;
             }
-        };
-        let hover_result = hover_provider.get_hover(position);
+        }
 
         Ok(hover_result)
     }
+
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
