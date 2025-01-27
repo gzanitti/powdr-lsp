@@ -66,7 +66,10 @@ impl<T> HoverProvider<T> {
         };
 
         let content = self.get_hover_content(symbol);
-        log_messages.push(format!("Generated hover content: {}", content));
+        log_messages.push(format!(
+            "Generated hover content: {} for symbol {:?}",
+            content, symbol
+        ));
 
         let hover = Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -130,12 +133,13 @@ impl<T> HoverProvider<T> {
                     )
                 }
             }
-            (SymbolKind::Callable, SymbolDetails::Callable { symbol: sym }) => {
+            (SymbolKind::Callable, SymbolDetails::Callable { inputs, outputs }) => {
                 format!(
                     "### Instruction\n\n\
-                    Name: {}\n\
-                    Symbol: {}\n",
-                    symbol.name, sym
+                    Name: {}\n\n\
+                    Inputs: {}\n\n\
+                    Outputs: {}\n",
+                    symbol.name, inputs, outputs
                 )
             }
             (SymbolKind::Definition, SymbolDetails::Definition) => {
@@ -169,8 +173,4 @@ impl<T> HoverProvider<T> {
             _ => format!("### Symbol\n\nName: {}\n", symbol.name),
         }
     }
-}
-
-fn is_identifier_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == ':' // TODO: Too naive
 }

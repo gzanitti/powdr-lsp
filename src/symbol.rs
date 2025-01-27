@@ -26,7 +26,7 @@ pub struct Symbol {
 pub enum SymbolDetails {
     Machine { degree: Option<DegreeInfo> },
     Register { type_info: String },
-    Callable { symbol: String },
+    Callable { inputs: String, outputs: String },
     Definition,
     Public,
     Intermediate,

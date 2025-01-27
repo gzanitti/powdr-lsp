@@ -2,7 +2,7 @@ use crate::parser::AnalyzedDoc;
 use crate::span::Span;
 use crate::symbol::{SemanticIndex, Symbol, SymbolDetails, SymbolKind};
 use powdr_ast::analyzed::Analyzed;
-use powdr_ast::asm_analysis::AnalysisASMFile;
+use powdr_ast::asm_analysis::{AnalysisASMFile, CallableSymbol};
 use powdr_ast::parsed::asm::AbsoluteSymbolPath;
 use tower_lsp::Client;
 use tower_lsp::lsp_types::MessageType;
@@ -77,15 +77,33 @@ impl<'a> PositionTracker<'a> {
             let abs_start = search_pos + pos;
             let abs_end = abs_start + symbol.len();
 
-            // Log context for this occurrence
-            let context = self
-                .text
-                .get(abs_start.saturating_sub(10)..abs_end.saturating_add(10))
-                .unwrap_or("");
-            log_messages.push(format!("Found occurrence at span {:?}", abs_start..abs_end));
-            log_messages.push(format!("Context: '...{}...'", context));
+            // Check for word boundaries using proper identifier rules
+            let is_valid_start =
+                abs_start == 0 || !is_identifier_char(self.text.as_bytes()[abs_start - 1] as char);
+            let is_valid_end = abs_end >= self.text.len()
+                || !is_identifier_char(self.text.as_bytes()[abs_end] as char);
 
-            positions.push(abs_start..abs_end);
+            // Check if we're inside a comment
+            let line_start = self.text[..abs_start].rfind('\n').unwrap_or(0);
+            let line_content = &self.text[line_start..abs_start];
+            let is_in_comment = line_content.trim_start().starts_with("//");
+
+            if !is_in_comment && is_valid_start && is_valid_end {
+                positions.push(abs_start..abs_end);
+                log_messages.push(format!(
+                    "Found valid occurrence at span {:?}",
+                    abs_start..abs_end
+                ));
+            } else {
+                log_messages.push(format!(
+                    "Skipping occurrence at span {:?} (in_comment: {}, valid_start: {}, valid_end: {})",
+                    abs_start..abs_end,
+                    is_in_comment,
+                    is_valid_start,
+                    is_valid_end
+                ));
+            }
+
             search_pos = abs_end;
         }
 
@@ -97,6 +115,10 @@ impl<'a> PositionTracker<'a> {
 
         (positions, log_messages)
     }
+}
+
+fn is_identifier_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == ':' // TODO: Too naive
 }
 
 fn analyze_asm(asm: &AnalysisASMFile, index: &mut SemanticIndex, source_text: &str) -> Vec<String> {
@@ -135,14 +157,54 @@ fn analyze_asm(asm: &AnalysisASMFile, index: &mut SemanticIndex, source_text: &s
             log_messages.extend(messages);
 
             for span in spans {
-                index.add_symbol(Symbol {
-                    kind: SymbolKind::Callable,
-                    name: callable.name.to_string(),
-                    span,
-                    details: SymbolDetails::Callable {
-                        symbol: format!("{:?}", callable.symbol),
-                    },
-                });
+                match callable.symbol {
+                    CallableSymbol::Function(func) => {
+                        index.add_symbol(Symbol {
+                            kind: SymbolKind::Callable,
+                            name: callable.name.to_string(),
+                            span,
+                            details: SymbolDetails::Callable {
+                                inputs: func
+                                    .params
+                                    .inputs
+                                    .iter()
+                                    .map(|p| p.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                                outputs: func
+                                    .params
+                                    .outputs
+                                    .iter()
+                                    .map(|p| p.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            },
+                        });
+                    }
+                    CallableSymbol::Operation(op) => {
+                        index.add_symbol(Symbol {
+                            kind: SymbolKind::Callable,
+                            name: callable.name.to_string(),
+                            span,
+                            details: SymbolDetails::Callable {
+                                inputs: op
+                                    .params
+                                    .inputs
+                                    .iter()
+                                    .map(|p| p.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                                outputs: op
+                                    .params
+                                    .outputs
+                                    .iter()
+                                    .map(|p| p.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            },
+                        });
+                    }
+                }
             }
         }
 
