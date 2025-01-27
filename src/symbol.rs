@@ -80,14 +80,14 @@ impl SemanticIndex {
             .and_then(|interval| self.symbols.get(&interval.val))
     }
 
-    pub fn get_all_ranges(&self) -> Vec<(Span, &Symbol)> {
-        self.range_index
-            .iter()
-            .filter_map(|interval| {
-                self.symbols
-                    .get(&interval.val)
-                    .map(|symbol| (interval.start..interval.stop, symbol))
-            })
-            .collect()
-    }
+    // pub fn get_all_ranges(&self) -> Vec<(Span, &Symbol)> {
+    //     self.range_index
+    //         .iter()
+    //         .filter_map(|interval| {
+    //             self.symbols
+    //                 .get(&interval.val)
+    //                 .map(|symbol| (interval.start..interval.stop, symbol))
+    //         })
+    //         .collect()
+    // }
 }

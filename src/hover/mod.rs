@@ -115,12 +115,20 @@ impl<T> HoverProvider<T> {
                 )
             }
             (SymbolKind::Register, SymbolDetails::Register { type_info }) => {
-                format!(
-                    "### Register\n\n\
-                    Name: {}\n\
-                    Type: {}\n",
-                    symbol.name, type_info
-                )
+                if type_info.is_empty() {
+                    format!(
+                        "### Register\n\n\
+                        Name: {}\n",
+                        symbol.name
+                    )
+                } else {
+                    format!(
+                        "### Register\n\n\
+                        Name: {}\n\
+                        Type: {}\n",
+                        symbol.name, type_info
+                    )
+                }
             }
             (SymbolKind::Callable, SymbolDetails::Callable { symbol: sym }) => {
                 format!(
